@@ -1,6 +1,8 @@
 from enum import StrEnum
 from typing import Annotated, Literal, Self
-from pydantic import BaseModel, Field, model_validator
+
+from pydantic import BaseModel, Field, IPvAnyInterface, field_validator, model_validator
+
 
 class DeviceStatus(StrEnum):
     IN_SERVICE = "in_service"
@@ -42,6 +44,8 @@ class IpMode(StrEnum):
     STATIC = "static"
     DHCP_RESERVED = "dhcp_reserved"
     DHCP = "dhcp"
+    SLAAC_EUI64 = "slaac_eui64"
+    SLAAC_PRIVACY = "slaac_privacy"
 
 
 class IpPolicy(StrEnum):
@@ -94,6 +98,11 @@ class Disposition(StrEnum):
     SHIP_TO_USER = "ship_to_user"
 
 
+class InterfaceRole(StrEnum):
+    BMC = "bmc"
+    OS = "os"
+
+
 class RackLocation(BaseModel):
     kind: Literal["rack"] = "rack"
     site_id: str
@@ -127,6 +136,7 @@ class Part(BaseModel):
     serial: str | None = None
     condition: PartCondition
     installed_in: str | None = None
+
     storage_location: StorageLocation | None = None
 
     @model_validator(mode="after")
@@ -136,3 +146,33 @@ class Part(BaseModel):
                 "A part cannot be installed in a device and in storage at the same time"
             )
         return self
+
+
+class IpAssignment(BaseModel):
+    address: IPvAnyInterface
+    mode: IpMode
+
+    @model_validator(mode="after")
+    def check_mode_matches_family(self) -> Self:
+        is_slaac = self.mode in (IpMode.SLAAC_EUI64, IpMode.SLAAC_PRIVACY)
+        if is_slaac and self.address.version != 6:
+            raise ValueError("SLAAC modes apply only to IPv6 addresses")
+        return self
+
+
+class Interface(BaseModel):
+    name: str
+    role: InterfaceRole
+    mac: str
+    speed_gbps: float | None = None
+    addresses: list[IpAssignment] = []
+    ip_policy: IpPolicy = IpPolicy.STABLE_REQUIRED
+    vlan: int | None = Field(default=None, ge=1, le=4094)
+
+    @field_validator("mac", mode="before")
+    @classmethod
+    def normalize_mac(cls, value: str) -> str:
+        digits = value.lower().replace(":", "").replace("-", "").replace(".", "")
+        if len(digits) != 12 or any(c not in "0123456789abcdef" for c in digits):
+            raise ValueError(f"Invalid MAC address: {value}")
+        return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
