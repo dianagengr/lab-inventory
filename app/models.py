@@ -1,8 +1,6 @@
 from enum import StrEnum
-from typing import Annotated, Literal
-
-from pydantic import BaseModel, Field
-
+from typing import Annotated, Literal, Self
+from pydantic import BaseModel, Field, model_validator
 
 class DeviceStatus(StrEnum):
     IN_SERVICE = "in_service"
@@ -130,3 +128,11 @@ class Part(BaseModel):
     condition: PartCondition
     installed_in: str | None = None
     storage_location: StorageLocation | None = None
+
+    @model_validator(mode="after")
+    def check_single_location(self) -> Self:
+        if self.installed_in and self.storage_location:
+            raise ValueError(
+                "A part cannot be installed in a device and in storage at the same time"
+            )
+        return self
