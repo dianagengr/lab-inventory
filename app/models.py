@@ -103,6 +103,19 @@ class InterfaceRole(StrEnum):
     OS = "os"
 
 
+class ManagementPathType(StrEnum):
+    BMC_REDFISH = "bmc_redfish"
+    BMC_IPMI = "bmc_ipmi"
+    KVM = "kvm"
+    PDU_OUTLET = "pdu_outlet"
+    IN_BAND_SSH = "in_band_ssh"
+
+
+class ProvisioningType(StrEnum):
+    MANAGED = "managed"
+    LOCAL = "local"
+
+
 class RackLocation(BaseModel):
     kind: Literal["rack"] = "rack"
     site_id: str
@@ -176,3 +189,58 @@ class Interface(BaseModel):
         if len(digits) != 12 or any(c not in "0123456789abcdef" for c in digits):
             raise ValueError(f"Invalid MAC address: {value}")
         return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
+
+
+class ManagementPath(BaseModel):
+    path_type: ManagementPathType
+    target: str
+    port: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def check_port_required(self) -> Self:
+        needs_port = self.path_type in (
+            ManagementPathType.KVM,
+            ManagementPathType.PDU_OUTLET,
+        )
+        if needs_port and self.port is None:
+            raise ValueError(f"{self.path_type} paths require a port number")
+        return self
+
+
+INTERFACE_PATH_TYPES = {
+    ManagementPathType.BMC_REDFISH,
+    ManagementPathType.BMC_IPMI,
+    ManagementPathType.IN_BAND_SSH,
+}
+
+
+class Device(BaseModel):
+    asset_id: str
+    hostname: str | None = None
+    serial: str | None = None
+    platform_id: str
+    location: Location | None = None
+    status: DeviceStatus
+    condition: DeviceCondition | None = None
+    provisioning: ProvisioningType
+    assigned_to: str | None = None
+    interfaces: list[Interface] = []
+    management_paths: list[ManagementPath] = []
+
+    @model_validator(mode="after")
+    def check_interfaces_and_paths(self) -> Self:
+        names = [interface.name for interface in self.interfaces]
+        if len(names) != len(set(names)):
+            raise ValueError("Interface names must be unique within a device")
+
+        macs = [interface.mac for interface in self.interfaces]
+        if len(macs) != len(set(macs)):
+            raise ValueError("MAC addresses must be unique within a device")
+
+        for path in self.management_paths:
+            if path.path_type in INTERFACE_PATH_TYPES and path.target not in names:
+                raise ValueError(
+                    f"{path.path_type} path targets interface '{path.target}', "
+                    f"which does not exist on this device"
+                )
+        return self
