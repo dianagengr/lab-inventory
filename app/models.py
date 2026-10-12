@@ -1,6 +1,8 @@
 from enum import StrEnum
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
 
 class DeviceStatus(StrEnum):
     IN_SERVICE = "in_service"
@@ -60,6 +62,7 @@ class TicketSource(StrEnum):
     DETECTED = "detected"
     REPORTED = "reported"
 
+
 class ReservationStatus(StrEnum):
     REQUESTED = "requested"
     ACTIVE = "active"
@@ -76,6 +79,42 @@ class QualificationStatus(StrEnum):
     QUALIFIED = "qualified"
     REJECTED = "rejected"
 
+
+class InboundStatus(StrEnum):
+    ORDERED = "ordered"
+    SHIPPED = "shipped"
+    PARTIALLY_RECEIVED = "partially_received"
+    RECEIVED = "received"
+    CLOSED = "closed"
+    CANCELLED = "cancelled"
+
+
+class Disposition(StrEnum):
+    INSTALL = "install"
+    STAGE = "stage"
+    STORAGE = "storage"
+    SHIP_TO_USER = "ship_to_user"
+
+
+class RackLocation(BaseModel):
+    kind: Literal["rack"] = "rack"
+    site_id: str
+    rack_id: str
+    rack_unit: int = Field(ge=1, le=60)
+    height_u: int = Field(default=1, ge=1, le=10)
+
+
+class StorageLocation(BaseModel):
+    kind: Literal["storage"] = "storage"
+    site_id: str
+    room: str
+    shelf: str
+    bin: str | None = None
+
+
+Location = Annotated[RackLocation | StorageLocation, Field(discriminator="kind")]
+
+
 class PartModel(BaseModel):
     part_model_id: str
     component_type: ComponentType
@@ -90,3 +129,4 @@ class Part(BaseModel):
     serial: str | None = None
     condition: PartCondition
     installed_in: str | None = None
+    storage_location: StorageLocation | None = None
