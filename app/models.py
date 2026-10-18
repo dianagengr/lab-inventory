@@ -1,7 +1,15 @@
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, Field, IPvAnyInterface, field_validator, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    IPvAnyInterface,
+    IPvAnyNetwork,
+    field_validator,
+    model_validator,
+)
 
 
 class DeviceStatus(StrEnum):
@@ -125,6 +133,7 @@ class BaselineMode(StrEnum):
     MINIMUM = "minimum"
     EXACT = "exact"
 
+
 class SiteType(StrEnum):
     LOCAL_LAB = "local_lab"
     LOCAL_COLO = "local_colo"
@@ -151,6 +160,18 @@ class MountType(StrEnum):
     RU = "ru"
     ZERO_U = "zero_u"
 
+
+class PortMode(StrEnum):
+    ACCESS = "access"
+    TRUNK = "trunk"
+
+
+class DiscoveryMethod(StrEnum):
+    LLDP = "lldp"
+    MAC_TABLE = "mac_table"
+    MANUAL = "manual"
+
+
 class RackLocation(BaseModel):
     kind: Literal["rack"] = "rack"
     site_id: str
@@ -168,6 +189,8 @@ class StorageLocation(BaseModel):
 
 
 Location = Annotated[RackLocation | StorageLocation, Field(discriminator="kind")]
+
+VlanId = Annotated[int, Field(ge=1, le=4094)]
 
 
 class PartModel(BaseModel):
@@ -214,7 +237,6 @@ class Interface(BaseModel):
     speed_gbps: float | None = None
     addresses: list[IpAssignment] = []
     ip_policy: IpPolicy = IpPolicy.STABLE_REQUIRED
-    vlan: int | None = Field(default=None, ge=1, le=4094)
 
     @field_validator("mac", mode="before")
     @classmethod
@@ -313,6 +335,7 @@ class Baseline(BaseModel):
     mode: BaselineMode = BaselineMode.MINIMUM
     bios_settings: dict[str, str] = {}
 
+
 class Site(BaseModel):
     site_id: str
     name: str
@@ -355,7 +378,9 @@ class RackItem(BaseModel):
     @model_validator(mode="after")
     def check_mounting_and_reference(self) -> Self:
         if self.mount == MountType.ZERO_U and self.rack_unit is not None:
-            raise ValueError("Zero-U items mount on the side rails and have no rack unit")
+            raise ValueError(
+                "Zero-U items mount on the side rails and have no rack unit"
+            )
         if self.mount == MountType.RU and self.rack_unit is None:
             raise ValueError("RU-mounted items need a rack_unit")
 
@@ -363,5 +388,51 @@ class RackItem(BaseModel):
         if is_infra and self.infra_id is None:
             raise ValueError(f"{self.item_type} rack items must reference an infra_id")
         if not is_infra and self.infra_id is not None:
-            raise ValueError(f"{self.item_type} items are passive and cannot reference an infra_id")
+            raise ValueError(
+                f"{self.item_type} items are passive and cannot reference an infra_id"
+            )
         return self
+
+
+class NetworkSegment(BaseModel):
+    site_id: str
+    role: InterfaceRole
+    vlan_id: VlanId
+    subnets: list[IPvAnyNetwork] = []
+    name: str | None = None
+
+
+class SwitchPort(BaseModel):
+    switch_id: str
+    port_name: str
+    admin_up: bool = True
+    link_up: bool
+    speed_gbps: float | None = None
+    module_present: bool | None = None
+    mode: PortMode = PortMode.ACCESS
+    access_vlan: VlanId | None = None
+    allowed_vlans: list[VlanId] = []
+    crc_errors: int = Field(default=0, ge=0)
+    lldp_neighbor: str | None = None
+    last_link_change: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def check_vlan_config(self) -> Self:
+        if self.mode == PortMode.ACCESS and self.allowed_vlans:
+            raise ValueError(
+                "Access ports carry one VLAN; use access_vlan, not allowed_vlans"
+            )
+        if self.mode == PortMode.TRUNK and self.access_vlan is not None:
+            raise ValueError(
+                "Trunk ports carry multiple VLANs; use allowed_vlans, not access_vlan"
+            )
+        return self
+
+
+class Connection(BaseModel):
+    device_asset_id: str
+    interface_name: str
+    switch_id: str
+    port_name: str
+    discovered_via: DiscoveryMethod
+    last_seen: AwareDatetime
