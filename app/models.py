@@ -125,13 +125,38 @@ class BaselineMode(StrEnum):
     MINIMUM = "minimum"
     EXACT = "exact"
 
+class SiteType(StrEnum):
+    LOCAL_LAB = "local_lab"
+    LOCAL_COLO = "local_colo"
+    REMOTE_COLO = "remote_colo"
+
+
+class InfraType(StrEnum):
+    SWITCH = "switch"
+    PDU = "pdu"
+    KVM = "kvm"
+
+
+class RackItemType(StrEnum):
+    SWITCH = "switch"
+    PDU = "pdu"
+    KVM = "kvm"
+    PATCH_PANEL = "patch_panel"
+    CABLE_MANAGER = "cable_manager"
+    BLANKING_PANEL = "blanking_panel"
+    SHELF = "shelf"
+
+
+class MountType(StrEnum):
+    RU = "ru"
+    ZERO_U = "zero_u"
 
 class RackLocation(BaseModel):
     kind: Literal["rack"] = "rack"
     site_id: str
     rack_id: str
     rack_unit: int = Field(ge=1, le=60)
-    height_u: int = Field(default=1, ge=1, le=10)
+    shelf_item_id: str | None = None
 
 
 class StorageLocation(BaseModel):
@@ -287,3 +312,56 @@ class Baseline(BaseModel):
     bmc_firmware: str | None = None
     mode: BaselineMode = BaselineMode.MINIMUM
     bios_settings: dict[str, str] = {}
+
+class Site(BaseModel):
+    site_id: str
+    name: str
+    site_type: SiteType
+    region: str
+    purpose: str
+    remote_hands_required: bool
+
+
+class Rack(BaseModel):
+    rack_id: str
+    site_id: str
+    height_ru: int = Field(default=42, ge=1, le=60)
+    power_capacity_watts: int | None = Field(default=None, ge=1)
+
+
+class InfraDevice(BaseModel):
+    infra_id: str
+    infra_type: InfraType
+    make: str
+    model: str
+    port_count: int = Field(ge=1)
+    management_address: IpAssignment | None = None
+    firmware: str | None = None
+
+
+INFRA_ITEM_TYPES = {RackItemType.SWITCH, RackItemType.PDU, RackItemType.KVM}
+
+
+class RackItem(BaseModel):
+    item_id: str
+    rack_id: str
+    item_type: RackItemType
+    mount: MountType = MountType.RU
+    rack_unit: int | None = Field(default=None, ge=1, le=60)
+    height_u: int = Field(default=1, ge=1, le=10)
+    infra_id: str | None = None
+    label: str | None = None
+
+    @model_validator(mode="after")
+    def check_mounting_and_reference(self) -> Self:
+        if self.mount == MountType.ZERO_U and self.rack_unit is not None:
+            raise ValueError("Zero-U items mount on the side rails and have no rack unit")
+        if self.mount == MountType.RU and self.rack_unit is None:
+            raise ValueError("RU-mounted items need a rack_unit")
+
+        is_infra = self.item_type in INFRA_ITEM_TYPES
+        if is_infra and self.infra_id is None:
+            raise ValueError(f"{self.item_type} rack items must reference an infra_id")
+        if not is_infra and self.infra_id is not None:
+            raise ValueError(f"{self.item_type} items are passive and cannot reference an infra_id")
+        return self
