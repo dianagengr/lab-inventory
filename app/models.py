@@ -116,6 +116,16 @@ class ProvisioningType(StrEnum):
     LOCAL = "local"
 
 
+class DeviceClass(StrEnum):
+    RACK_SERVER = "rack_server"
+    MINI_PC = "mini_pc"
+
+
+class BaselineMode(StrEnum):
+    MINIMUM = "minimum"
+    EXACT = "exact"
+
+
 class RackLocation(BaseModel):
     kind: Literal["rack"] = "rack"
     site_id: str
@@ -149,7 +159,6 @@ class Part(BaseModel):
     serial: str | None = None
     condition: PartCondition
     installed_in: str | None = None
-
     storage_location: StorageLocation | None = None
 
     @model_validator(mode="after")
@@ -224,6 +233,8 @@ class Device(BaseModel):
     condition: DeviceCondition | None = None
     provisioning: ProvisioningType
     assigned_to: str | None = None
+    bios_version: str | None = None
+    bmc_firmware: str | None = None
     interfaces: list[Interface] = []
     management_paths: list[ManagementPath] = []
 
@@ -244,3 +255,35 @@ class Device(BaseModel):
                     f"which does not exist on this device"
                 )
         return self
+
+
+class BomLine(BaseModel):
+    part_model_id: str
+    quantity: int = Field(ge=1)
+
+
+class Platform(BaseModel):
+    platform_id: str
+    make: str
+    model: str
+    device_class: DeviceClass
+    height_u: int = Field(default=1, ge=1, le=10)
+    has_bmc: bool
+    bom: list[BomLine] = []
+
+    @model_validator(mode="after")
+    def check_unique_bom_lines(self) -> Self:
+        part_ids = [line.part_model_id for line in self.bom]
+        if len(part_ids) != len(set(part_ids)):
+            raise ValueError(
+                "Each part model should appear once in a BOM; use quantity instead"
+            )
+        return self
+
+
+class Baseline(BaseModel):
+    platform_id: str
+    bios_version: str | None = None
+    bmc_firmware: str | None = None
+    mode: BaselineMode = BaselineMode.MINIMUM
+    bios_settings: dict[str, str] = {}
