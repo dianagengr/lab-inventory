@@ -1,5 +1,6 @@
 from enum import StrEnum
 from typing import Annotated, Literal, Self
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import (
     AwareDatetime,
@@ -172,6 +173,65 @@ class DiscoveryMethod(StrEnum):
     MANUAL = "manual"
 
 
+class EventSource(StrEnum):
+    BMC_LOG = "bmc_log"
+    OS_LOG = "os_log"
+    SWITCH = "switch"
+    PDU = "pdu"
+    COLLECTOR = "collector"
+    TOOL = "tool"
+
+
+class Severity(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    CRITICAL = "critical"
+
+
+class MetricName(StrEnum):
+    POWER_WATTS = "power_watts"
+    CPU_TEMP_C = "cpu_temp_c"
+    INLET_TEMP_C = "inlet_temp_c"
+    FAN_RPM = "fan_rpm"
+    CPU_UTIL_PCT = "cpu_util_pct"
+
+
+class BootStage(StrEnum):
+    POWER = "power"
+    OOB_MANAGEMENT = "oob_management"
+    POST_BIOS = "post_bios"
+    HARDWARE = "hardware"
+    NETWORK = "network"
+    PROVISIONING = "provisioning"
+    OS = "os"
+
+
+class CheckOutcome(StrEnum):
+    PASS = "pass"
+    FAIL = "fail"
+    NOT_APPLICABLE = "not_applicable"
+    UNKNOWN = "unknown"
+
+
+class FindingCategory(StrEnum):
+    FAILURE = "failure"
+    RISK = "risk"
+    TECH_DEBT = "tech_debt"
+    INVENTORY = "inventory"
+
+
+class ActionType(StrEnum):
+    REPLACE_CABLE = "replace_cable"
+    SEAT_OR_REPLACE_OPTIC = "seat_or_replace_optic"
+    RUN_CABLE = "run_cable"
+    SET_SWITCH_VLAN = "set_switch_vlan"
+    SET_STABLE_IP = "set_stable_ip"
+    UPDATE_FIRMWARE = "update_firmware"
+    RESET_BMC = "reset_bmc"
+    REPLACE_PART = "replace_part"
+    INVESTIGATE = "investigate"
+
+
 class RackLocation(BaseModel):
     kind: Literal["rack"] = "rack"
     site_id: str
@@ -191,6 +251,8 @@ class StorageLocation(BaseModel):
 Location = Annotated[RackLocation | StorageLocation, Field(discriminator="kind")]
 
 VlanId = Annotated[int, Field(ge=1, le=4094)]
+
+OsiLayer = Literal[1, 2, 3, 4, 7]
 
 
 class PartModel(BaseModel):
@@ -341,8 +403,18 @@ class Site(BaseModel):
     name: str
     site_type: SiteType
     region: str
+    timezone: str
     purpose: str
     remote_hands_required: bool
+
+    @field_validator("timezone")
+    @classmethod
+    def check_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError(f"Unknown time zone: {value}") from None
+        return value
 
 
 class Rack(BaseModel):
@@ -436,3 +508,58 @@ class Connection(BaseModel):
     port_name: str
     discovered_via: DiscoveryMethod
     last_seen: AwareDatetime
+
+
+class Event(BaseModel):
+    event_id: str
+    subject_id: str
+    timestamp: AwareDatetime
+    source: EventSource
+    severity: Severity
+    message: str
+    data: dict[str, str | int | float] = {}
+
+
+class MetricSample(BaseModel):
+    subject_id: str
+    timestamp: AwareDatetime
+    metric: MetricName
+    sensor: str | None = None
+    value: float
+
+
+class RecommendedAction(BaseModel):
+    action_type: ActionType
+    needs_hands: bool
+    description: str
+    parameters: dict[str, str | int] = {}
+
+
+class CheckResult(BaseModel):
+    result_id: str
+    subject_id: str
+    check_name: str
+    outcome: CheckOutcome
+    category: FindingCategory | None = None
+    stage: BootStage | None = None
+    osi_layer: OsiLayer | None = None
+    summary: str
+    expected: str | None = None
+    observed: str | None = None
+    likely_cause: str | None = None
+    recommended_action: RecommendedAction | None = None
+    checked_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def check_outcome_consistency(self) -> Self:
+        failed = self.outcome == CheckOutcome.FAIL
+        has_problem_details = (
+            self.category or self.likely_cause or self.recommended_action
+        )
+        if not failed and has_problem_details:
+            raise ValueError(
+                "Only failed checks can carry a category, likely cause, or recommended action"
+            )
+        if failed and self.category is None:
+            raise ValueError("Failed checks must have a category")
+        return self
